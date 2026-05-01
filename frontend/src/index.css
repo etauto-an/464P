@@ -1,0 +1,369 @@
+/* Global styles for the Inventory Sync Dashboard */
+
+:root {
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  --bg: #f8f9fa;
+  --surface: #ffffff;
+  --border: #dee2e6;
+  --text: #212529;
+  --text-muted: #6c757d;
+  --accent: #0d6efd;
+  --accent-hover: #0b5ed7;
+  --danger: #dc3545;
+  --danger-hover: #bb2d3b;
+  --success: #198754;
+  --warning: #ffc107;
+  --warning-bg: #fff3cd;
+  --error-bg: #f8d7da;
+  --error-border: #f5c2c7;
+
+  font: 14px/1.5 var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+h1, h2, h3 {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.15rem; }
+h3 { font-size: 1rem; }
+
+p { margin: 0 0 0.5rem; }
+
+/* ----- Layout ----- */
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background: #1a1d23;
+  color: #fff;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.app-header h1 {
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.app-header .subtitle {
+  color: #adb5bd;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.app-body {
+  flex: 1;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ----- Card / Panel ----- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ----- Grid layout for forms and sync ----- */
+
+.panels-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .panels-row { grid-template-columns: 1fr; }
+}
+
+/* ----- Table ----- */
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+thead th {
+  background: #f1f3f5;
+  border-bottom: 2px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: #f8f9fa; }
+
+tbody td {
+  padding: 0.5rem 0.75rem;
+  vertical-align: middle;
+}
+
+.sku-cell {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.count-cell {
+  font-family: var(--mono);
+  font-weight: 600;
+  text-align: right;
+  width: 80px;
+}
+
+.count-cell.available {
+  color: var(--success);
+}
+
+.count-cell.warning {
+  color: var(--warning);
+}
+
+.count-cell.danger {
+  color: var(--danger);
+}
+
+/* ----- Highlight recently-updated row ----- */
+
+tbody tr.row-updated {
+  background: #e8f5e9;
+  transition: background 1.5s ease-out;
+}
+
+/* ----- Forms ----- */
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+input[type="text"],
+input[type="number"] {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15);
+}
+
+button {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  width: 100%;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  width: 100%;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-hover);
+}
+
+.btn-secondary {
+  background: #e9ecef;
+  color: var(--text);
+  width: 100%;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #dee2e6;
+}
+
+/* ----- Alerts ----- */
+
+.alert {
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.alert-error {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: #842029;
+}
+
+.alert-success {
+  background: #d1e7dd;
+  border: 1px solid #a3cfbb;
+  color: #0a3622;
+}
+
+/* ----- Sync panel ----- */
+
+.sync-result {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.sync-stats {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: 4px;
+  background: #f1f3f5;
+}
+
+.stat .stat-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-family: var(--mono);
+  line-height: 1;
+}
+
+.stat .stat-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat.success .stat-value { color: var(--success); }
+.stat.error .stat-value   { color: var(--danger); }
+
+/* ----- Outcome badge ----- */
+
+.badge {
+  display: inline-block;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge-success { background: #d1e7dd; color: #0a3622; }
+.badge-error   { background: var(--error-bg); color: #842029; }
+
+/* ----- Empty / loading states ----- */
+
+.state-message {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* ----- Refresh button ----- */
+
+.btn-refresh {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  width: auto;
+}
+
+.btn-refresh:hover:not(:disabled) {
+  background: #f1f3f5;
+  color: var(--text);
+}
