@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.database import engine, get_db
-from db.models import Base, SyncLog, Product
+from db.models import Base, SyncLog, Product, PickEvent, DamageReport, OrderEvent
 from engine.reconciliation import (
     ReconciliationEngine,
     SKUNotFoundError,
@@ -98,6 +98,24 @@ class InventoryResponse(BaseModel):
         from_attributes = True
 
 
+class EventLogResponse(BaseModel):
+    """
+    Response shape for a single event log entry (order, pick, or damage).
+
+    Layer: Presentation
+    """
+    id: int
+    event_type: str
+    sku: str
+    quantity: int
+    status: str
+    rejection_reason: Optional[str] = None
+    timestamp: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
 class SyncLogResponse(BaseModel):
     """
     Response shape for a single sync log entry.
@@ -105,9 +123,9 @@ class SyncLogResponse(BaseModel):
     Layer: Presentation
     """
     id: int
-    sku: str
     operation: str
     outcome: str
+    details: Optional[str] = None
     timestamp: Optional[datetime]
 
     class Config:
@@ -225,6 +243,39 @@ def pick_event(request: EventRequest, db: Session = Depends(get_db)):
 
 
 @app.post(
+    "/events/order",
+    response_model=InventoryResponse,
+    summary="Submit an incoming customer order",
+)
+def order_event(request: EventRequest, db: Session = Depends(get_db)):
+    """
+    Process an incoming customer order: increment Reserved and decrement
+    Available for a SKU.
+
+    Parameters:
+        request (EventRequest): {sku, quantity}
+
+    Returns:
+        InventoryResponse: updated inventory state after the order.
+
+    Raises:
+        400: if quantity is invalid or exceeds available stock.
+        404: if the SKU does not exist.
+    """
+    # Routed through the engine rather than writing directly to the DB.
+    # This enforces the layered architecture constraint -- the API layer
+    # has no direct dependency on the persistence layer.
+    engine_instance = ReconciliationEngine(db)
+    try:
+        state = engine_instance.process_order(request.sku, request.quantity)
+    except SKUNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (InsufficientInventoryError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _enrich(state, db)
+
+
+@app.post(
     "/events/damage",
     response_model=InventoryResponse,
     summary="Submit a damage report",
@@ -255,6 +306,54 @@ def damage_event(request: EventRequest, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
+# Event log endpoint
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/events/logs",
+    response_model=list[EventLogResponse],
+    summary="Retrieve all event log entries (orders, picks, damages)",
+)
+def get_event_logs(
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """
+    Return a unified, time-ordered list of order, pick, and damage events.
+
+    Queries all three audit tables, tags each row with its event type, merges
+    them in Python, and returns the most recent entries first.
+
+    Parameters:
+        limit (int): maximum number of entries to return (default 200, max 500).
+
+    Returns:
+        list[EventLogResponse]: merged and sorted event entries.
+
+    Raises:
+        400: if limit is not between 1 and 500.
+    """
+    if not (1 <= limit <= 500):
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+
+    # Query each audit table and tag rows with their event type.
+    orders  = db.query(OrderEvent).all()
+    picks   = db.query(PickEvent).all()
+    damages = db.query(DamageReport).all()
+
+    events = (
+        [EventLogResponse(id=e.id, event_type="order",  sku=e.sku, quantity=e.quantity, status=e.status, rejection_reason=e.rejection_reason, timestamp=e.timestamp) for e in orders]  +
+        [EventLogResponse(id=e.id, event_type="pick",   sku=e.sku, quantity=e.quantity, status=e.status, rejection_reason=e.rejection_reason, timestamp=e.timestamp) for e in picks]   +
+        [EventLogResponse(id=e.id, event_type="damage", sku=e.sku, quantity=e.quantity, status=e.status, rejection_reason=e.rejection_reason, timestamp=e.timestamp) for e in damages]
+    )
+
+    # Sort merged list by timestamp descending; rows with no timestamp sort last.
+    events.sort(key=lambda e: e.timestamp or datetime.min, reverse=True)
+
+    return events[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Sync endpoints
 # ---------------------------------------------------------------------------
 
@@ -278,34 +377,20 @@ def sync_inventory(db: Session = Depends(get_db)):
     engine_instance = ReconciliationEngine(db)
     states = engine_instance.get_all_inventory()
 
-    results = []
-    errors = 0
-
     for state in states:
         # Adapter interface boundary: cross from API layer into Adapter layer.
         # The adapter receives only the abstract write_inventory() call.
-        response = adapter.write_inventory(state.sku, state.available)
+        adapter.write_inventory(state.sku, state.available)
 
-        outcome = "success" if response.get("success") else "error"
-        if outcome == "error":
-            errors += 1
-
-        # Record each sync outcome in SyncLog for auditability.
-        log_entry = SyncLog(
-            sku=state.sku,
-            operation="write_inventory",
-            outcome=outcome,
-        )
-        db.add(log_entry)
-        results.append({"sku": state.sku, "outcome": outcome, "message": response.get("message")})
-
+    # Record one log entry for the entire sync run.
+    db.add(SyncLog(
+        operation="sync_all",
+        outcome="success",
+        details=f"{len(states)} SKUs synced",
+    ))
     db.commit()
 
-    return {
-        "synced": len(states) - errors,
-        "errors": errors,
-        "results": results,
-    }
+    return {"synced": len(states)}
 
 
 @app.get(
@@ -313,16 +398,35 @@ def sync_inventory(db: Session = Depends(get_db)):
     response_model=list[SyncLogResponse],
     summary="Retrieve sync log entries",
 )
-def get_sync_logs(db: Session = Depends(get_db)):
+def get_sync_logs(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
     """
-    Return all sync log entries, most recent first.
+    Return sync log entries, most recent first, with pagination.
+
+    Parameters:
+        limit (int): maximum number of entries to return (default 50, max 200).
+        offset (int): number of entries to skip from the most recent (default 0).
 
     Returns:
-        list[SyncLogResponse]: all rows from sync_logs ordered by timestamp desc.
+        list[SyncLogResponse]: up to `limit` rows from sync_logs starting at
+        `offset`, ordered by timestamp desc.
+
+    Raises:
+        400: if limit is not between 1 and 200, or offset is negative.
     """
+    if not (1 <= limit <= 200):
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be non-negative.")
+
     logs = (
         db.query(SyncLog)
         .order_by(SyncLog.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
     return logs

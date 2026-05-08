@@ -8,18 +8,29 @@ All other modules that need a database session import get_db() from here.
 Layer: Persistence (db/)
 """
 
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.pool import StaticPool
 
-# SQLite file stored at the project root alongside the application code.
-DATABASE_URL = "sqlite:///./inventory.db"
+# Absolute path derived from this file's location so the database is found
+# regardless of the working directory the process is started from.
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory.db")
+DATABASE_URL = f"sqlite:///{_DB_PATH}"
 
-# check_same_thread=False is required for SQLite when used with FastAPI's
-# default (non-async) thread model; SQLite's default True would reject
-# accesses from any thread other than the creating thread.
+# StaticPool shares one connection across all threads. This is the correct
+# pool for SQLite + FastAPI: FastAPI runs sync handlers in a thread pool, and
+# SQLAlchemy's default SingletonThreadPool gives each thread its own
+# connection -- if one thread's connection ends up in a bad state, every
+# other request routed to it gets a 500. StaticPool serialises all access
+# through a single connection, eliminating that problem.
+# check_same_thread=False is still required so SQLite accepts calls from
+# threads other than the one that opened the connection.
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
 
 # autocommit=False: transactions are explicit (committed via db.commit()).

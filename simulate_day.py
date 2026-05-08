@@ -47,12 +47,25 @@ DAMAGE_RATE = 0.08
 # Maximum units to write off in a single damage report.
 MAX_DAMAGE_QTY = 2
 
+# Fraction of SKUs that receive a new incoming order between rounds.
+ORDER_FRACTION = 0.35
+
+# Maximum units per incoming order.
+MAX_ORDER_QTY = 4
+
 # Seconds to wait between individual API calls within a round.
 # Increase this to slow the demo down so the row flashes are visible.
 INTER_EVENT_DELAY = 0.3
 
 # Seconds to wait between rounds.
 INTER_ROUND_DELAY = 1.5
+
+# Whether to fire intentionally invalid requests each round to exercise the
+# engine's rejection paths and populate the event log with rejected entries.
+INJECT_ERRORS = True
+
+# Number of bad requests to fire per round when INJECT_ERRORS is True.
+ERRORS_PER_ROUND = 2
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +118,13 @@ def post(path: str, body: dict) -> tuple:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        # 4xx responses still carry a JSON body with the error detail
-        return exc.code, json.loads(exc.read().decode())
+        body = exc.read().decode()
+        try:
+            return exc.code, json.loads(body)
+        except json.JSONDecodeError:
+            # Non-JSON error body (e.g. empty 500) -- wrap it so callers
+            # can still inspect exc.code and print a useful message.
+            return exc.code, {"detail": body or f"HTTP {exc.code}"}
     except urllib.error.URLError as exc:
         print(f"\n[ERROR] Could not reach {url}: {exc}")
         sys.exit(1)
@@ -115,6 +133,83 @@ def post(path: str, body: dict) -> tuple:
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
+
+def inject_bad_requests(inventory: list, count: int) -> None:
+    """
+    Fire a sample of intentionally invalid requests to exercise engine rejection
+    paths.  Each call chooses randomly from the error scenarios below so that
+    both the rejection audit records and the frontend event log show a realistic
+    mix of successful and rejected events.
+
+    Error scenarios covered:
+      - zero quantity (pick / order / damage)
+      - negative quantity (pick / order / damage)
+      - quantity that exceeds reserved (over-pick)
+      - quantity that exceeds available (over-order / over-damage)
+      - non-existent SKU
+
+    Parameters:
+        inventory (list[dict]): current SKU state, used to craft plausible
+                                over-limit quantities.
+        count (int): number of bad requests to fire.
+    """
+    # Build a pool of bad request scenarios.
+    scenarios = []
+
+    # Zero and negative quantity -- valid SKU, nonsense quantity.
+    if inventory:
+        sku = random.choice(inventory)["sku"]
+        scenarios += [
+            ("/events/pick",   {"sku": sku, "quantity": 0},  "zero qty pick"),
+            ("/events/order",  {"sku": sku, "quantity": -1}, "negative qty order"),
+            ("/events/damage", {"sku": sku, "quantity": 0},  "zero qty damage"),
+        ]
+
+    # Over-pick: quantity exceeds reserved.
+    over_pickable = [s for s in inventory if s["reserved"] > 0]
+    if over_pickable:
+        row = random.choice(over_pickable)
+        scenarios.append((
+            "/events/pick",
+            {"sku": row["sku"], "quantity": row["reserved"] + 99},
+            "over-pick",
+        ))
+
+    # Over-order / over-damage: quantity exceeds available.
+    over_orderable = [s for s in inventory if s["available"] > 0]
+    if over_orderable:
+        row = random.choice(over_orderable)
+        scenarios += [
+            (
+                "/events/order",
+                {"sku": row["sku"], "quantity": row["available"] + 99},
+                "over-order",
+            ),
+            (
+                "/events/damage",
+                {"sku": row["sku"], "quantity": row["available"] + 99},
+                "over-damage",
+            ),
+        ]
+
+    # Non-existent SKU.
+    fake_sku = "SKU-DOES-NOT-EXIST"
+    scenarios += [
+        ("/events/pick",   {"sku": fake_sku, "quantity": 1}, "unknown SKU pick"),
+        ("/events/order",  {"sku": fake_sku, "quantity": 1}, "unknown SKU order"),
+        ("/events/damage", {"sku": fake_sku, "quantity": 1}, "unknown SKU damage"),
+    ]
+
+    chosen = random.sample(scenarios, min(count, len(scenarios)))
+
+    for endpoint, payload, label in chosen:
+        status, resp = post(endpoint, payload)
+        detail = resp.get("detail", resp) if isinstance(resp, dict) else resp
+        # All of these should be rejected (4xx); flag unexpected 200s.
+        tag = "REJECTED (ok)" if status != 200 else "UNEXPECTED 200"
+        print(f"  BAD     [{label}]  {tag}: {detail}")
+        time.sleep(INTER_EVENT_DELAY)
+
 
 def fetch_inventory() -> list:
     """
@@ -130,9 +225,13 @@ def run_round(round_num: int, inventory: list) -> list:
     """
     Execute one round of simulated warehouse activity.
 
-    Selects a random subset of SKUs for picking. SKUs with Reserved = 0 are
-    skipped (no committed orders to fulfil). A small fraction of SKUs also
-    receive a damage report.
+    Each round has three phases in order:
+      1. Incoming orders  -- new customer orders commit available stock.
+      2. Pick events      -- pickers fulfil previously reserved orders.
+      3. Damage reports   -- occasional write-offs of damaged units.
+
+    Orders are fired before picks so that Reserved is replenished each round,
+    keeping the simulation going indefinitely rather than draining to zero.
 
     Parameters:
         round_num (int): 1-based round number, used for display only.
@@ -142,21 +241,41 @@ def run_round(round_num: int, inventory: list) -> list:
         list[str]: SKUs that were modified this round (for the caller to
                    selectively re-fetch if needed).
     """
-    pickable = [s for s in inventory if s["reserved"] > 0]
+    orderable  = [s for s in inventory if s["available"] > 0]
+    pickable   = [s for s in inventory if s["reserved"] > 0]
     damageable = [s for s in inventory if s["available"] > 0]
 
-    # Choose a random subset to pick this round
-    pick_count = max(1, int(len(pickable) * PICK_FRACTION))
-    pick_targets = random.sample(pickable, min(pick_count, len(pickable)))
-
-    # Choose a small random subset for damage reports
+    order_count  = max(1, int(len(orderable)  * ORDER_FRACTION))
+    pick_count   = max(1, int(len(pickable)   * PICK_FRACTION))
     damage_count = max(0, int(len(damageable) * DAMAGE_RATE))
+
+    order_targets  = random.sample(orderable,  min(order_count,  len(orderable)))
+    pick_targets   = random.sample(pickable,   min(pick_count,   len(pickable)))
     damage_targets = random.sample(damageable, min(damage_count, len(damageable)))
 
     print(f"\n--- Round {round_num} ---  "
-          f"picks: {len(pick_targets)}  damages: {len(damage_targets)}")
+          f"orders: {len(order_targets)}  "
+          f"picks: {len(pick_targets)}  "
+          f"damages: {len(damage_targets)}")
 
     modified = []
+
+    # --- Incoming orders ---
+    for sku_row in order_targets:
+        sku = sku_row["sku"]
+        qty = random.randint(1, min(MAX_ORDER_QTY, sku_row["available"]))
+
+        status, resp = post("/events/order", {"sku": sku, "quantity": qty})
+
+        if status == 200:
+            print(f"  ORDER   {sku}  qty={qty}  "
+                  f"reserved={resp['reserved']}  "
+                  f"available={resp['available']}")
+            modified.append(sku)
+        else:
+            print(f"  ORDER   {sku}  qty={qty}  REJECTED: {resp.get('detail', resp)}")
+
+        time.sleep(INTER_EVENT_DELAY)
 
     # --- Pick events ---
     for sku_row in pick_targets:
@@ -171,7 +290,7 @@ def run_round(round_num: int, inventory: list) -> list:
                   f"physical={resp['physical']}  "
                   f"reserved={resp['reserved']}  "
                   f"available={resp['available']}")
-                modified.append(sku)
+            modified.append(sku)
         else:
             # Unexpected rejection -- log and continue
             print(f"  PICK    {sku}  qty={qty}  REJECTED: {resp.get('detail', resp)}")
@@ -189,11 +308,15 @@ def run_round(round_num: int, inventory: list) -> list:
             print(f"  DAMAGE  {sku}  qty={qty}  "
                   f"physical={resp['physical']}  "
                   f"available={resp['available']}")
-                modified.append(sku)
+            modified.append(sku)
         else:
             print(f"  DAMAGE  {sku}  qty={qty}  REJECTED: {resp.get('detail', resp)}")
 
         time.sleep(INTER_EVENT_DELAY)
+
+    # --- Intentionally invalid requests ---
+    if INJECT_ERRORS:
+        inject_bad_requests(inventory, ERRORS_PER_ROUND)
 
     return modified
 
@@ -239,7 +362,9 @@ def main():
     """
     print("=" * 70)
     print("  Warehouse Day Simulation")
-    print(f"  {NUM_ROUNDS} rounds  |  ~{int(PICK_FRACTION*100)}% SKUs picked per round  |  {int(DAMAGE_RATE*100)}% damage rate")
+    print(f"  {NUM_ROUNDS} rounds  |  ~{int(PICK_FRACTION*100)}% SKUs picked per round  |  "
+          f"{int(DAMAGE_RATE*100)}% damage rate  |  "
+          f"error injection {'ON' if INJECT_ERRORS else 'OFF'}")
     print("=" * 70)
 
     # Snapshot state before the simulation for the final summary
@@ -262,7 +387,7 @@ def main():
     print("\nTriggering end-of-day sync…")
     status, sync_resp = post("/sync", {})
     if status == 200:
-        print(f"  Sync complete: {sync_resp['synced']} succeeded, {sync_resp['errors']} errors")
+        print(f"  Sync complete: {sync_resp['synced']} SKUs synced")
     else:
         print(f"  Sync failed: {sync_resp}")
 

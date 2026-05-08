@@ -17,15 +17,17 @@ import InventoryTable from './components/InventoryTable'
 import EventForm from './components/EventForm'
 import SyncPanel from './components/SyncPanel'
 import SyncLogTable from './components/SyncLogTable'
+import EventLogTable from './components/EventLogTable'
 
 export default function App() {
   const [inventory, setInventory] = useState([])
-  const [syncLogs, setSyncLogs] = useState([])
   const [loadingInventory, setLoadingInventory] = useState(true)
-  const [loadingLogs, setLoadingLogs] = useState(true)
 
   // SKU of the most recently-updated row, used to flash a highlight
   const [updatedSku, setUpdatedSku] = useState(null)
+
+  const [syncRefreshToken, setSyncRefreshToken] = useState(0)
+  const [eventRefreshToken, setEventRefreshToken] = useState(0)
 
   // -----------------------------------------------------------------------
   // Data fetching
@@ -42,22 +44,10 @@ export default function App() {
     }
   }, [])
 
-  const fetchSyncLogs = useCallback(async () => {
-    setLoadingLogs(true)
-    try {
-      const res = await fetch('/sync/logs')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setSyncLogs(await res.json())
-    } finally {
-      setLoadingLogs(false)
-    }
-  }, [])
-
-  // Load both tables on mount
+  // Load inventory on mount (SyncLogTable fetches its own data)
   useEffect(() => {
     fetchInventory()
-    fetchSyncLogs()
-  }, [fetchInventory, fetchSyncLogs])
+  }, [fetchInventory])
 
   // -----------------------------------------------------------------------
   // Event handlers -- called by child forms after a successful mutation
@@ -76,15 +66,16 @@ export default function App() {
     // Flash the updated row
     setUpdatedSku(updatedRow.sku)
     setTimeout(() => setUpdatedSku(null), 1600)
+    setEventRefreshToken(t => t + 1)
   }
 
   /**
-   * After a sync completes, refresh both the inventory table (Available
-   * counts are unchanged but good to confirm) and the sync log table.
+   * After a sync completes, refresh the inventory table and signal
+   * SyncLogTable to reset to page 1 and re-fetch.
    */
   function handleSyncComplete() {
     fetchInventory()
-    fetchSyncLogs()
+    setSyncRefreshToken(t => t + 1)
   }
 
   // -----------------------------------------------------------------------
@@ -120,8 +111,17 @@ export default function App() {
           />
         </div>
 
-        {/* Event forms and sync panel -- one row of three cards */}
+        {/* Event forms and sync panel -- 2x2 grid */}
         <div className="panels-row">
+          <EventForm
+            title="Incoming Order"
+            endpoint="/events/order"
+            submitLabel="Place Order"
+            btnClass="btn-order"
+            onSuccess={handleInventoryUpdate}
+            description="Increments Reserved and decrements Available."
+          />
+
           <EventForm
             title="Pick Event"
             endpoint="/events/pick"
@@ -143,19 +143,32 @@ export default function App() {
           <SyncPanel onSyncComplete={handleSyncComplete} />
         </div>
 
+        {/* Event log table */}
+        <div className="card">
+          <div className="card-header">
+            <h2>Event Log</h2>
+            <button
+              className="btn-refresh"
+              onClick={() => setEventRefreshToken(t => t + 1)}
+            >
+              ↻ Refresh
+            </button>
+          </div>
+          <EventLogTable refreshToken={eventRefreshToken} />
+        </div>
+
         {/* Sync log table */}
         <div className="card">
           <div className="card-header">
             <h2>Sync Log</h2>
             <button
               className="btn-refresh"
-              onClick={fetchSyncLogs}
-              disabled={loadingLogs}
+              onClick={() => setSyncRefreshToken(t => t + 1)}
             >
-              {loadingLogs ? 'Loading…' : '↻ Refresh'}
+              ↻ Refresh
             </button>
           </div>
-          <SyncLogTable logs={syncLogs} loading={loadingLogs} />
+          <SyncLogTable refreshToken={syncRefreshToken} />
         </div>
       </main>
     </>

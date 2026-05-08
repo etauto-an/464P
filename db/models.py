@@ -54,9 +54,12 @@ class InventoryState(Base):
 
 class PickEvent(Base):
     """
-    Audit record for a completed pick (units removed to fulfil an order).
+    Audit record for a pick attempt (successful or rejected).
 
     Layer: Persistence
+
+    status is "success" when the pick was applied, "rejected" when the engine
+    refused it. rejection_reason is populated only on rejection.
     Immutable after insertion -- never updated, only inserted.
     """
 
@@ -65,14 +68,19 @@ class PickEvent(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     sku = Column(String, nullable=False, index=True)
     quantity = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="success")
+    rejection_reason = Column(String, nullable=True)
     timestamp = Column(DateTime, server_default=func.now())
 
 
 class DamageReport(Base):
     """
-    Audit record for a damage report (units written off due to damage).
+    Audit record for a damage report attempt (successful or rejected).
 
     Layer: Persistence
+
+    status is "success" when the report was applied, "rejected" when refused.
+    rejection_reason is populated only on rejection.
     Immutable after insertion -- never updated, only inserted.
     """
 
@@ -81,22 +89,46 @@ class DamageReport(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     sku = Column(String, nullable=False, index=True)
     quantity = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="success")
+    rejection_reason = Column(String, nullable=True)
+    timestamp = Column(DateTime, server_default=func.now())
+
+
+class OrderEvent(Base):
+    """
+    Audit record for an incoming customer order attempt (successful or rejected).
+
+    Layer: Persistence
+
+    A successful order increments Reserved and decrements Available. Physical is
+    unchanged. status is "success" or "rejected"; rejection_reason is populated
+    only on rejection.
+    Immutable after insertion -- never updated, only inserted.
+    """
+
+    __tablename__ = "order_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sku = Column(String, nullable=False, index=True)
+    quantity = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="success")
+    rejection_reason = Column(String, nullable=True)
     timestamp = Column(DateTime, server_default=func.now())
 
 
 class SyncLog(Base):
     """
-    Record of one sync push operation to the storefront adapter.
+    Record of one full sync run to the storefront adapter.
 
     Layer: Persistence
-    One row is created per SKU per sync run, capturing the outcome
-    of calling the adapter's write_inventory() for that SKU.
+    One row is created per sync run, capturing the overall outcome and
+    the number of SKUs pushed to the adapter.
     """
 
     __tablename__ = "sync_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    sku = Column(String, nullable=False, index=True)
-    operation = Column(String, nullable=False)   # e.g. "write_inventory"
-    outcome = Column(String, nullable=False)     # e.g. "success" or "error"
+    operation = Column(String, nullable=False)   # e.g. "sync_all"
+    outcome = Column(String, nullable=False)     # e.g. "success"
+    details = Column(String, nullable=True)      # e.g. "30 SKUs synced"
     timestamp = Column(DateTime, server_default=func.now())

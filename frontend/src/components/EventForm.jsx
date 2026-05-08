@@ -1,9 +1,9 @@
 /**
  * Presentation layer -- EventForm.jsx
  *
- * Reusable form for submitting a pick event or a damage report.
+ * Reusable form for submitting an order, pick, or damage event.
  * The caller controls the API endpoint, button label, and CSS class,
- * allowing this component to serve both event types without duplication.
+ * allowing this component to serve all event types without duplication.
  *
  * On success the API returns the updated InventoryResponse for the affected
  * SKU. The parent (App.jsx) handles the state update via onSuccess().

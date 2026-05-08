@@ -6,22 +6,29 @@ CPSC 464 prototype — middleware synchronization engine that maintains consiste
 
 ## Prerequisites
 
-- Python 3.x
-- Node.js 18+ and npm
+- Python 3.10+
+- Node.js 18+ and npm (Vite 8 requires Node 18+)
 
 ---
 
 ## Setup
 
-### 1. Install Python dependencies
+### 1. Create and activate a virtual environment
 
 From the project root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+```
+
+### 2. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Seed the database
+### 3. Seed the database
 
 ```bash
 python db/seed.py
@@ -29,7 +36,7 @@ python db/seed.py
 
 This creates `inventory.db` and populates it with 30 synthetic SKUs.
 
-### 3. Start the backend
+### 4. Start the backend
 
 ```bash
 uvicorn api.main:app --reload
@@ -38,7 +45,7 @@ uvicorn api.main:app --reload
 The API will be available at `http://localhost:8000`.  
 Interactive API docs (Swagger UI): `http://localhost:8000/docs`
 
-### 4. Start the frontend
+### 5. Start the frontend
 
 In a separate terminal, from the `frontend/` directory:
 

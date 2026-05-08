@@ -109,7 +109,7 @@ p { margin: 0 0 0.5rem; }
 
 .panels-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 1.25rem;
 }
 
@@ -123,6 +123,11 @@ p { margin: 0 0 0.5rem; }
   overflow-x: auto;
 }
 
+.table-wrapper--scrollable {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -130,6 +135,9 @@ table {
 }
 
 thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: #f1f3f5;
   border-bottom: 2px solid var(--border);
   padding: 0.5rem 0.75rem;
@@ -257,6 +265,16 @@ button:disabled {
   background: var(--danger-hover);
 }
 
+.btn-order {
+  background: #6f42c1;
+  color: #fff;
+  width: 100%;
+}
+
+.btn-order:hover:not(:disabled) {
+  background: #5a32a3;
+}
+
 .btn-secondary {
   background: #e9ecef;
   color: var(--text);
@@ -342,6 +360,10 @@ button:disabled {
 .badge-success { background: #d1e7dd; color: #0a3622; }
 .badge-error   { background: var(--error-bg); color: #842029; }
 
+.badge-event-order  { background: #dbeafe; color: #1e3a5f; }
+.badge-event-pick   { background: #d1e7dd; color: #0a3622; }
+.badge-event-damage { background: #fde8e8; color: #842029; }
+
 /* ----- Empty / loading states ----- */
 
 .state-message {
@@ -349,6 +371,41 @@ button:disabled {
   padding: 2rem;
   color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+/* ----- Pagination ----- */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.page-indicator {
+  color: var(--text-muted);
+  min-width: 4rem;
+  text-align: center;
+}
+
+.btn-page {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  width: auto;
+}
+
+.btn-page:hover:not(:disabled) {
+  background: #f1f3f5;
+}
+
+.btn-page:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ----- Refresh button ----- */

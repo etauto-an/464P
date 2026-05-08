@@ -16,7 +16,7 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
-from db.models import InventoryState, PickEvent, DamageReport
+from db.models import InventoryState, PickEvent, DamageReport, OrderEvent
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +123,9 @@ class ReconciliationEngine:
         Available = Physical - Reserved is mathematically unchanged by a pick,
         but is recalculated and persisted to keep the DB invariant explicit.
 
+        All attempts -- successful or rejected -- are recorded in pick_events
+        with a status of "success" or "rejected" and an optional rejection_reason.
+
         Parameters:
             sku (str): the SKU being picked.
             quantity (int): number of units to pick (must be > 0).
@@ -140,36 +143,44 @@ class ReconciliationEngine:
         pick events are recorded and inventory decremented. Route handlers
         delegate here and never touch the DB directly.
         """
-        if quantity <= 0:
-            raise ValueError("Pick quantity must be a positive integer.")
+        try:
+            if quantity <= 0:
+                raise ValueError("Pick quantity must be a positive integer.")
 
-        # --- Transaction boundary begins ---
-        # Both the InventoryState update and the PickEvent audit record
-        # are written in the same commit. Either both succeed or neither does.
+            # --- Transaction boundary begins ---
+            # Both the InventoryState update and the PickEvent audit record
+            # are written in the same commit. Either both succeed or neither does.
 
-        state = self.get_inventory(sku)
+            state = self.get_inventory(sku)
 
-        # Business rule: a pick draws against reserved units only.
-        # Reject if the requested quantity exceeds what has been reserved.
-        if quantity > state.reserved:
-            raise InsufficientInventoryError(
-                f"Pick quantity {quantity} exceeds reserved count "
-                f"{state.reserved} for SKU '{sku}'."
-            )
+            # Business rule: a pick draws against reserved units only.
+            # Reject if the requested quantity exceeds what has been reserved.
+            if quantity > state.reserved:
+                raise InsufficientInventoryError(
+                    f"Pick quantity {quantity} exceeds reserved count "
+                    f"{state.reserved} for SKU '{sku}'."
+                )
 
-        state.physical -= quantity
-        state.reserved -= quantity
-        # Recalculate available explicitly so the DB invariant is always
-        # stored directly rather than inferred by callers.
-        state.available = state.physical - state.reserved
+            state.physical -= quantity
+            state.reserved -= quantity
+            # Recalculate available explicitly so the DB invariant is always
+            # stored directly rather than inferred by callers.
+            state.available = state.physical - state.reserved
 
-        # Audit record -- persisted in the same transaction as the state update.
-        self.db.add(PickEvent(sku=sku, quantity=quantity))
+            # Audit record -- persisted in the same transaction as the state update.
+            self.db.add(PickEvent(sku=sku, quantity=quantity, status="success"))
 
-        # Commit both the state update and the event record atomically.
-        self.db.commit()
-        self.db.refresh(state)
-        return state
+            # Commit both the state update and the event record atomically.
+            self.db.commit()
+            self.db.refresh(state)
+            return state
+
+        except (ValueError, SKUNotFoundError, InsufficientInventoryError) as exc:
+            # Roll back any partial state, then record the rejected attempt.
+            self.db.rollback()
+            self.db.add(PickEvent(sku=sku, quantity=quantity, status="rejected", rejection_reason=str(exc)))
+            self.db.commit()
+            raise
 
     # ------------------------------------------------------------------
     # Damage report
@@ -183,6 +194,9 @@ class ReconciliationEngine:
         Physical decreases (items are gone) and Available decreases (they can
         no longer be sold). Reserved is unaffected -- those order commitments
         remain against the remaining undamaged stock.
+
+        All attempts -- successful or rejected -- are recorded in damage_reports
+        with a status of "success" or "rejected" and an optional rejection_reason.
 
         Parameters:
             sku (str): the SKU with damaged units.
@@ -200,27 +214,106 @@ class ReconciliationEngine:
         Architectural constraint: same as process_pick -- only this method
         records damage events and decrements counts.
         """
-        if quantity <= 0:
-            raise ValueError("Damage quantity must be a positive integer.")
+        try:
+            if quantity <= 0:
+                raise ValueError("Damage quantity must be a positive integer.")
 
-        # --- Transaction boundary begins ---
-        state = self.get_inventory(sku)
+            # --- Transaction boundary begins ---
+            state = self.get_inventory(sku)
 
-        # Business rule: Available must not go negative.
-        # This is the primary invariant enforced by the engine.
-        if quantity > state.available:
-            raise InsufficientInventoryError(
-                f"Damage quantity {quantity} exceeds available count "
-                f"{state.available} for SKU '{sku}'."
-            )
+            # Business rule: Available must not go negative.
+            # This is the primary invariant enforced by the engine.
+            if quantity > state.available:
+                raise InsufficientInventoryError(
+                    f"Damage quantity {quantity} exceeds available count "
+                    f"{state.available} for SKU '{sku}'."
+                )
 
-        state.physical -= quantity
-        state.available -= quantity
-        # Reserved is unchanged; the invariant available = physical - reserved still holds.
+            state.physical -= quantity
+            state.available -= quantity
+            # Reserved is unchanged; the invariant available = physical - reserved still holds.
 
-        self.db.add(DamageReport(sku=sku, quantity=quantity))
+            self.db.add(DamageReport(sku=sku, quantity=quantity, status="success"))
 
-        # Commit the state update and the damage record atomically.
-        self.db.commit()
-        self.db.refresh(state)
-        return state
+            # Commit the state update and the damage record atomically.
+            self.db.commit()
+            self.db.refresh(state)
+            return state
+
+        except (ValueError, SKUNotFoundError, InsufficientInventoryError) as exc:
+            # Roll back any partial state, then record the rejected attempt.
+            self.db.rollback()
+            self.db.add(DamageReport(sku=sku, quantity=quantity, status="rejected", rejection_reason=str(exc)))
+            self.db.commit()
+            raise
+
+    # ------------------------------------------------------------------
+    # Order event
+    # ------------------------------------------------------------------
+
+    def process_order(self, sku: str, quantity: int) -> InventoryState:
+        """
+        Process an incoming customer order: increment Reserved and decrement
+        Available atomically.
+
+        An order commits stock to a customer before it is physically picked.
+        Physical is unchanged (units are still on the shelf); Reserved increases
+        (the commitment is recorded); Available decreases (those units can no
+        longer be sold to anyone else).
+
+        All attempts -- successful or rejected -- are recorded in order_events
+        with a status of "success" or "rejected" and an optional rejection_reason.
+
+        Parameters:
+            sku (str): the SKU being ordered.
+            quantity (int): number of units ordered (must be > 0).
+
+        Returns:
+            InventoryState: the updated inventory state after the order.
+
+        Raises:
+            ValueError: if quantity <= 0.
+            SKUNotFoundError: if the SKU does not exist.
+            InsufficientInventoryError: if quantity exceeds Available.
+                Available must never go negative -- an order cannot be accepted
+                for stock that does not exist or is already committed.
+
+        Architectural constraint: same as process_pick and process_damage --
+        only this method records order events and mutates counts. Route
+        handlers delegate here and never touch the DB directly.
+        """
+        try:
+            if quantity <= 0:
+                raise ValueError("Order quantity must be a positive integer.")
+
+            # --- Transaction boundary begins ---
+            # Both the InventoryState update and the OrderEvent audit record
+            # are written in the same commit. Either both succeed or neither does.
+            state = self.get_inventory(sku)
+
+            # Business rule: Available must not go negative.
+            # An order can only be accepted if enough uncommitted stock exists.
+            if quantity > state.available:
+                raise InsufficientInventoryError(
+                    f"Order quantity {quantity} exceeds available count "
+                    f"{state.available} for SKU '{sku}'."
+                )
+
+            state.reserved += quantity
+            state.available -= quantity
+            # Physical is unchanged; the invariant available = physical - reserved still holds.
+
+            # Audit record -- persisted in the same transaction as the state update.
+            self.db.add(OrderEvent(sku=sku, quantity=quantity, status="success"))
+
+            # Commit both the state update and the event record atomically.
+            self.db.commit()
+            self.db.refresh(state)
+            return state
+
+        except (ValueError, SKUNotFoundError, InsufficientInventoryError) as exc:
+            # Roll back any partial state, then record the rejected attempt.
+            self.db.rollback()
+            self.db.add(OrderEvent(sku=sku, quantity=quantity, status="rejected", rejection_reason=str(exc)))
+            self.db.commit()
+            raise

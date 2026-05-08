@@ -103,8 +103,6 @@ The MVP is demoed via the web dashboard. A complete demo should walk through:
 
 ## Code Commenting Standards
 
-All code must be thoroughly commented. This is a class project and comments serve both evaluation and knowledge transfer purposes.
-
 **Modules and files** -- every file must open with a module-level docstring describing its role in the layered architecture and which layer it belongs to.
 
 **Classes** -- every class must have a docstring describing its responsibility, the layer it belongs to, and any interfaces it implements or depends on.
@@ -129,14 +127,3 @@ All code must be thoroughly commented. This is a class project and comments serv
 result = engine.process_pick(sku, quantity)
 ```
 
-**TODO comments** -- use `# TODO:` to flag anything deferred to Phase II (e.g., real Shopify adapter, webhook handling, authentication).
-
----
-
-## Out of Scope (Prototype)
-
-- Real Shopify API credentials or live API calls
-- Webhook event processing
-- Authentication or authorization on any endpoint
-- CSV export fallback
-- Deployment beyond local Docker Compose or `uvicorn` dev server

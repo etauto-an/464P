@@ -1,19 +1,41 @@
 /**
  * Presentation layer -- SyncLogTable.jsx
  *
- * Renders a paginated table of sync log entries returned by GET /sync/logs.
- * Each row shows the SKU, operation, outcome badge, and timestamp.
- * Most recent entries are listed first (the API returns them in that order).
+ * Fetches and renders a table of sync log entries from GET /sync/logs.
  *
  * Props:
- *   logs    {Array} - array of SyncLogResponse objects
- *   loading {bool}  - true while the initial fetch is in flight
+ *   refreshToken {number} - increment this value to re-fetch
+ *                           (called by App after a sync completes)
  */
 
-// How many log rows to show before pagination kicks in
-const PAGE_SIZE = 50
+import { useState, useEffect } from 'react'
 
-export default function SyncLogTable({ logs, loading }) {
+export default function SyncLogTable({ refreshToken }) {
+  const [logs, setLogs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+
+    fetch('/sync/logs')
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then(data => {
+        if (!cancelled) setLogs(data)
+      })
+      .catch(() => {
+        if (!cancelled) setLogs([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [refreshToken])
+
   if (loading && logs.length === 0) {
     return <p className="state-message">Loading sync logs…</p>
   }
@@ -26,47 +48,35 @@ export default function SyncLogTable({ logs, loading }) {
     )
   }
 
-  // Show only the most recent PAGE_SIZE entries to keep the table manageable
-  const visible = logs.slice(0, PAGE_SIZE)
-
   return (
-    <>
-      <div className="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>SKU</th>
-              <th>Operation</th>
-              <th>Outcome</th>
-              <th>Timestamp</th>
+    <div className="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Details</th>
+            <th>Outcome</th>
+            <th>Timestamp</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.map(log => (
+            <tr key={log.id}>
+              <td>{log.operation}</td>
+              <td>{log.details || '—'}</td>
+              <td>
+                <span className={`badge badge-${log.outcome === 'success' ? 'success' : 'error'}`}>
+                  {log.outcome}
+                </span>
+              </td>
+              <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                {formatTimestamp(log.timestamp)}
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {visible.map(log => (
-              <tr key={log.id}>
-                <td className="sku-cell">{log.id}</td>
-                <td className="sku-cell">{log.sku}</td>
-                <td>{log.operation}</td>
-                <td>
-                  <span className={`badge badge-${log.outcome === 'success' ? 'success' : 'error'}`}>
-                    {log.outcome}
-                  </span>
-                </td>
-                <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                  {formatTimestamp(log.timestamp)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {logs.length > PAGE_SIZE && (
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-          Showing {PAGE_SIZE} of {logs.length} entries.
-        </p>
-      )}
-    </>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 

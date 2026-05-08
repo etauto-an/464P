@@ -29,16 +29,12 @@ class ShopifyDummyAdapter(StorefrontAdapter):
     Implements: StorefrontAdapter
 
     Simulates the behaviour of a real Shopify inventory integration by
-    returning randomised or hardcoded responses. A small configurable
-    ERROR_RATE simulates transient storefront API failures.
+    returning randomised or hardcoded responses.
 
     All Shopify-specific details (response shape, simulated item IDs,
     error messages) are contained entirely within this class. The engine
     and API layers never see these details.
     """
-
-    # Probability (0.0-1.0) of a simulated transient storefront error.
-    ERROR_RATE = 0.05
 
     def read_inventory(self, sku: str) -> dict:
         """
@@ -67,9 +63,6 @@ class ShopifyDummyAdapter(StorefrontAdapter):
         """
         Simulate pushing an inventory count update to Shopify.
 
-        With probability ERROR_RATE the operation returns a simulated failure
-        to demonstrate how the sync log captures error outcomes.
-
         Parameters:
             sku (str): the SKU whose Available count is being pushed.
             quantity (int): the Available count to set on the storefront.
@@ -79,23 +72,14 @@ class ShopifyDummyAdapter(StorefrontAdapter):
                 "sku": str,
                 "success": bool,
                 "message": str,
-                "shopify_inventory_item_id": str | None  (simulated)
+                "shopify_inventory_item_id": str  (simulated)
             }
 
         # Adapter interface boundary: "shopify_inventory_item_id" is a
         # Shopify-specific field. The engine and sync route treat the
         # response as an opaque dict and only inspect "success".
         """
-        # Simulate occasional transient failure (e.g., rate limit hit)
-        if random.random() < self.ERROR_RATE:
-            return {
-                "sku": sku,
-                "success": False,
-                "message": "Simulated transient Shopify API error (rate limited).",
-                "shopify_inventory_item_id": None,
-            }
-
-        # Simulate a Shopify inventory_item_id that a real adapter would use
+        # Simulate a Shopify inventory_item_id that a real adapter would use.
         fake_item_id = f"shopify_{sku}_{random.randint(100_000, 999_999)}"
         return {
             "sku": sku,
