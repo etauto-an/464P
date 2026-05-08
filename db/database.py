@@ -12,25 +12,23 @@ import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 
 # Absolute path derived from this file's location so the database is found
 # regardless of the working directory the process is started from.
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory.db")
 DATABASE_URL = f"sqlite:///{_DB_PATH}"
 
-# StaticPool shares one connection across all threads. This is the correct
-# pool for SQLite + FastAPI: FastAPI runs sync handlers in a thread pool, and
-# SQLAlchemy's default SingletonThreadPool gives each thread its own
-# connection -- if one thread's connection ends up in a bad state, every
-# other request routed to it gets a 500. StaticPool serialises all access
-# through a single connection, eliminating that problem.
-# check_same_thread=False is still required so SQLite accepts calls from
-# threads other than the one that opened the connection.
+# NullPool opens a fresh SQLite connection for each session and closes it when
+# the session ends. This is required for SQLite + multi-threaded uvicorn:
+# StaticPool shares one underlying sqlite3* handle across all threads, which
+# causes memory corruption (SIGSEGV) when two requests execute SQL
+# concurrently. NullPool eliminates sharing entirely -- each request gets its
+# own connection, so there is no cross-thread state to corrupt.
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
+    poolclass=NullPool,
 )
 
 # autocommit=False: transactions are explicit (committed via db.commit()).
